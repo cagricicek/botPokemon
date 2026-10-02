@@ -94,14 +94,13 @@ def proxy_settings() -> dict | None:
     return cfg
 
 
-# Proxy kotası harcamamak için gereksiz içerikleri (resim, font, video, css) indirme
-BLOCKED_TYPES = {"image", "media", "font", "stylesheet"}
+# Proxy kullanılırken kota harcamamak için sadece resim/video/font indirilmez.
+# Script'ler engellenmez: sitenin bot kontrolü (dış alan adlarından gelen JS) çalışabilmeli.
+BLOCKED_TYPES = {"image", "media", "font"}
 
 
 def _route(route):
-    req = route.request
-    host = req.url.split("/")[2] if "://" in req.url else ""
-    if req.resource_type in BLOCKED_TYPES or not host.endswith("pokemoncenter.com"):
+    if route.request.resource_type in BLOCKED_TYPES:
         return route.abort()
     return route.continue_()
 
@@ -139,7 +138,8 @@ def fetch_products() -> list[dict]:
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
-        context.route("**/*", _route)
+        if proxy:
+            context.route("**/*", _route)
         page = context.new_page()
 
         def _count(resp):
