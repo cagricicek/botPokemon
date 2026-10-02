@@ -11,6 +11,8 @@ Kullanım:
     python monitor.py --test   # sadece Telegram'a test mesajı gönderir
 """
 
+from __future__ import annotations
+
 import html
 import json
 import os
@@ -22,8 +24,10 @@ import requests
 
 # ---------------- Ayarlar ----------------
 BASE = "https://www.pokemoncenter.com"
-CATEGORY_URL = BASE + "/en-gb/category/tcg-cards?sort=launch_date%2Bdesc&ps=96"
-PAGES = int(os.getenv("PAGES", "1"))  # 1 sayfa = en yeni 96 ürün
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "32"))  # en yeni kaç ürün izlensin (32 / 96)
+CATEGORY_URL = BASE + f"/en-gb/category/tcg-cards?sort=launch_date%2Bdesc&ps={PAGE_SIZE}"
+PAGES = int(os.getenv("PAGES", "1"))
+PROXY_URL = os.getenv("PROXY_URL", "").strip()  # ör. http://kullanici:sifre@host:port
 STATE_FILE = Path(__file__).with_name("state.json")
 FAIL_ALERT_AFTER = 6  # art arda bu kadar başarısız denemede bir kez uyar
 
@@ -77,14 +81,44 @@ def parse_products(next_data: dict) -> list[dict]:
     return products
 
 
+def proxy_settings() -> dict | None:
+    if not PROXY_URL:
+        return None
+    from urllib.parse import unquote, urlparse
+
+    u = urlparse(PROXY_URL if "://" in PROXY_URL else "http://" + PROXY_URL)
+    cfg = {"server": f"{u.scheme}://{u.hostname}:{u.port}"}
+    if u.username:
+        cfg["username"] = unquote(u.username)
+        cfg["password"] = unquote(u.password or "")
+    return cfg
+
+
+# Proxy kotası harcamamak için gereksiz içerikleri (resim, font, video, css) indirme
+BLOCKED_TYPES = {"image", "media", "font", "stylesheet"}
+
+
+def _route(route):
+    req = route.request
+    host = req.url.split("/")[2] if "://" in req.url else ""
+    if req.resource_type in BLOCKED_TYPES or not host.endswith("pokemoncenter.com"):
+        return route.abort()
+    return route.continue_()
+
+
 def fetch_products() -> list[dict]:
     from playwright.sync_api import sync_playwright
 
     headless = os.getenv("HEADLESS", "1") != "0"
+    proxy = proxy_settings()
     launch_args = dict(
         headless=headless,
         args=["--disable-blink-features=AutomationControlled"],
     )
+    if proxy:
+        launch_args["proxy"] = proxy
+        print(f"Proxy: {proxy['server']}")
+    bytes_in = [0]
 
     all_products: list[dict] = []
     with sync_playwright() as pw:
@@ -105,7 +139,16 @@ def fetch_products() -> list[dict]:
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
+        context.route("**/*", _route)
         page = context.new_page()
+
+        def _count(resp):
+            try:
+                bytes_in[0] += resp.request.sizes().get("responseBodySize", 0)
+            except Exception:  # noqa: BLE001
+                pass
+
+        page.on("response", _count)
         try:
             for i in range(1, PAGES + 1):
                 url = CATEGORY_URL + (f"&page={i}" if i > 1 else "")
@@ -124,6 +167,7 @@ def fetch_products() -> list[dict]:
                 pass
             raise
         finally:
+            print(f"İndirilen veri: ~{bytes_in[0] / 1_048_576:.2f} MB")
             browser.close()
     return all_products
 
