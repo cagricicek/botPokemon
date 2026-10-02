@@ -33,8 +33,19 @@ echo "✓ Bot dosyaları indirildi"
 [ -x "$APP/venv/bin/python" ] || python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install -q --upgrade pip
 "$APP/venv/bin/pip" install -q -r "$APP/requirements.txt"
-"$APP/venv/bin/python" -m playwright install --with-deps chromium >/dev/null
-"$APP/venv/bin/python" -m playwright install chrome >/dev/null 2>&1 || echo "  (Google Chrome kurulamadı, Chromium kullanılacak)"
+export PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=600000
+"$APP/venv/bin/python" -m playwright install-deps chromium >/dev/null
+# Önce Google Chrome (dl.google.com'dan iner), olmazsa Playwright Chromium
+if ! command -v google-chrome >/dev/null 2>&1; then
+  echo "… Google Chrome kuruluyor"
+  "$APP/venv/bin/python" -m playwright install chrome >/dev/null 2>&1 || true
+fi
+if command -v google-chrome >/dev/null 2>&1; then
+  echo "✓ Google Chrome kuruldu"
+else
+  echo "… Chrome kurulamadı, Playwright Chromium indiriliyor"
+  "$APP/venv/bin/python" -m playwright install chromium
+fi
 echo "✓ Python ve tarayıcı hazır"
 
 # 5) Telegram bilgileri
